@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>全息终端 - 丝滑过渡版</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #111; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; background: radial-gradient(circle at center, #2b2b2b, #000); }
+        
+        #video-input { position: absolute; top: 10px; left: 10px; width: 160px; height: 120px; z-index: 2; border: 1px solid #444; opacity: 0.3; transform: scaleX(-1); border-radius: 8px; }
+        
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; }
+        
+        .header { 
+            position: absolute; top: 0; width: 100%; padding: 20px; box-sizing: border-box;
+            display: flex; justify-content: space-between; align-items: center;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.9), transparent);
+        }
+        .title { color: #fff; font-size: 24px; font-weight: 300; letter-spacing: 2px; text-shadow: 0 0 10px rgba(255,255,255,0.3); }
+        .controls { pointer-events: auto; }
+        
+        .btn {
+            background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255,255,255,0.3); color: #fff;
+            padding: 8px 20px; border-radius: 20px; cursor: pointer; backdrop-filter: blur(5px);
+            transition: all 0.3s; font-size: 14px; margin-left: 10px;
+        }
+        .btn:hover { background: #fff; color: #000; box-shadow: 0 0 15px rgba(255,255,255,0.5); }
+        
+        .list-panel {
+            position: absolute; top: 80px; right: 20px; width: 220px;
+            pointer-events: auto; max-height: 60vh; overflow-y: auto;
+            background: rgba(0,0,0,0.5); backdrop-filter: blur(8px);
+            border-right: 2px solid #555; padding: 10px; border-radius: 8px 0 0 8px;
+        }
+        .list-panel::-webkit-scrollbar { width: 4px; }
+        .list-panel::-webkit-scrollbar-thumb { background: #555; border-radius: 2px; }
+        .list-header {
+            font-size: 12px; color: #888; letter-spacing: 1px; 
+            margin-bottom: 10px; text-align: right; border-bottom: 1px solid #444; padding-bottom: 5px;
+        }
+        .model-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 10px; margin-bottom: 4px;
+            background: rgba(255,255,255,0.05); cursor: pointer; transition: all 0.2s;
+            border-radius: 4px;
+        }
+        .model-item:hover { background: rgba(255,255,255,0.15); transform: translateX(-5px); }
+        .model-item.active { 
+            background: linear-gradient(90deg, rgba(224, 192, 160, 0.2), transparent); 
+            border-left: 3px solid #e0c0a0;
+        }
+        .model-name { font-size: 14px; color: #ddd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px;}
+        .model-verts { font-size: 10px; color: #888; font-family: 'Courier New', monospace; }
+
+        .status-panel { 
+            position: absolute; bottom: 30px; left: 30px; 
+            color: rgba(255,255,255,0.7); font-size: 14px; line-height: 1.6;
+            border-left: 3px solid #e0c0a0; padding-left: 15px;
+        }
+        .highlight { color: #e0c0a0; font-weight: bold; }
+        
+        /* 进度条指示器 (用于显示手势确认进度) */
+        .gesture-progress {
+            display: inline-block; width: 0px; height: 8px; 
+            background: #00ff00; transition: width 0.1s;
+            border-radius: 4px; vertical-align: middle;
+        }
+
+        .mode-indicator {
+            position: absolute; bottom: 30px; right: 30px;
+            text-align: right; pointer-events: none;
+        }
+        .mode-item {
+            color: #555; font-size: 18px; margin: 5px 0; font-weight: bold; transition: all 0.3s; text-transform: uppercase;
+        }
+        .mode-item.active { color: #e0c0a0; text-shadow: 0 0 8px rgba(224, 192, 160, 0.5); font-size: 24px; }
+
+        .hand-cursor {
+            position: absolute; width: 20px; height: 20px; 
+            border: 2px solid rgba(255, 255, 255, 0.8); border-radius: 50%;
+            transform: translate(-50%, -50%); pointer-events: none; display: none;
+            box-shadow: 0 0 15px rgba(255, 255, 255, 0.5);
+            transition: all 0.2s;
+        }
+        /* 加载状态的光标 */
+        .hand-cursor.loading {
+            border-color: #00ff00; border-style: dashed;
+            animation: spin 2s linear infinite;
+        }
+        @keyframes spin { 100% { transform: translate(-50%, -50%) rotate(360deg); } }
+
+        #file-input { display: none; }
+    </style>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/PLYLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <video id="video-input"></video>
+    <div id="canvas-container"></div>
+
+    <div id="ui-layer">
+        <div class="header">
+            <div class="title">ARTISAN STUDIO /// V3.6</div>
+            <div class="controls">
+                <button class="btn" onclick="document.getElementById('file-input').click()">Import</button>
+                <input type="file" id="file-input" accept=".glb,.gltf,.obj,.ply">
+            </div>
+        </div>
+
+        <div class="list-panel" id="model-list-panel">
+            <div class="list-header">ASSET LIBRARY</div>
+            <div id="model-list-content"></div>
+        </div>
+
+        <div class="status-panel">
+            <div>SYSTEM: <span id="sys-status" class="highlight">READY</span></div>
+            <div>GESTURE: <span id="gesture-status">WAITING</span> <div id="gesture-bar" class="gesture-progress"></div></div>
+            <div>SCALE: <span id="scale-status">100%</span></div>
+        </div>
+
+        <div class="mode-indicator" id="mode-list">
+            <div class="mode-item active" data-mode="0">Original</div>
+            <div class="mode-item" data-mode="1">Plaster</div>
+            <div class="mode-item" data-mode="2">Wood</div>
+            <div class="mode-item" data-mode="3">Clay</div>
+        </div>
+
+        <div class="hand-cursor" id="hand-cursor"></div>
+    </div>
+
+<script>
+    // --- 全局配置 ---
+    const CONFIG = {
+        lerpSpeed: 0.1,
+        rotationSensitivity: 4.0,
+        fistThreshold: 0.12,
+        sixThreshold: 0.13,
+        // 关键：手势确认时间 (毫秒)
+        gestureHoldTime: 600, 
+    };
+
+    // --- 状态机定义 ---
+    const GESTURE_STATE = {
+        IDLE: 'IDLE',
+        DETECTING_FIST: 'DETECTING_FIST',
+        DETECTING_SIX: 'DETECTING_SIX',
+        LOCKED: 'LOCKED' // 动作执行后的锁定状态，直到手张开
+    };
+
+    let currentState = GESTURE_STATE.IDLE;
+    let gestureStartTime = 0;
+    
+    // 目标变换变量
+    let targetRotationX = 0, targetRotationY = 0;
+    let targetScale = 1.0;
+    
+    // 模型管理
+    let loadedModels = []; 
+    let activeModelIndex = -1;
+    const MODES = ['original', 'plaster', 'wood', 'mud'];
+    let currentMaterialIndex = 0;
+
+    // 过渡动画变量
+    let isTransitioning = false;
+    let transitionPhase = 0; // 0: Idle, 1: Out (Shrink), 2: In (Grow)
+    let transitionTargetIndex = -1;
+    let scanRing = null; // 缓冲动画环
+
+    // 辅助资源
+    let woodTexture, noiseTexture;
+    let plasterMaterial, woodMaterial, mudMaterial;
+
+    // --- 1. THREE.JS 初始化 ---
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 5000);
+    camera.position.set(0, 0, 400);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.physicallyCorrectLights = true; 
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(renderer.domElement);
+
+    // 灯光
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambientLight);
+    const mainLight = new THREE.DirectionalLight(0xffeeb1, 1.2); 
+    mainLight.position.set(80, 100, 80); mainLight.castShadow = true;
+    mainLight.shadow.mapSize.width = 2048; mainLight.shadow.mapSize.height = 2048;
+    scene.add(mainLight);
+    const fillLight = new THREE.DirectionalLight(0xcceeff, 0.5);
+    fillLight.position.set(-80, 20, -80); scene.add(fillLight);
+    
+    const pivotGroup = new THREE.Group(); scene.add(pivotGroup);
+
+    // --- 缓冲动画环 (Visual Buffer) ---
+    function createScanRing() {
+        const geo = new THREE.TorusGeometry(110, 2, 16, 100);
+        const mat = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0 });
+        const ring = new THREE.Mesh(geo, mat);
+        ring.rotation.x = Math.PI / 2;
+        ring.visible = false;
+        scene.add(ring);
+        return ring;
+    }
+    scanRing = createScanRing();
+
+    // --- 2. 材质生成 ---
+    function createNoiseTexture() {
+        const size = 512; const canvas = document.createElement('canvas');
+        canvas.width = size; canvas.height = size; const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#808080'; ctx.fillRect(0,0,size,size);
+        for(let i=0; i<15000; i++) {
+            const x = Math.random() * size; const y = Math.random() * size;
+            const shade = Math.random() > 0.5 ? 200 : 50; 
+            ctx.fillStyle = `rgba(${shade}, ${shade}, ${shade}, 0.1)`;
+            ctx.beginPath(); ctx.arc(x, y, Math.random()*2, 0, Math.PI * 2); ctx.fill();
+        }
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping; return tex;
+    }
+
+    function createWoodTexture() {
+        const size = 512; const canvas = document.createElement('canvas');
+        canvas.width = size; canvas.height = size; const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#8b5a2b'; ctx.fillRect(0,0,size,size);
+        for(let i=0; i<400; i++) {
+            ctx.fillStyle = `rgba(60, 30, 0, ${Math.random()*0.1})`;
+            ctx.fillRect(Math.random() * size, 0, Math.random() * 20 + 2, size);
+        }
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping; return tex;
+    }
+
+    noiseTexture = createNoiseTexture();
+    woodTexture = createWoodTexture();
+    
+    plasterMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, metalness: 0.05 });
+    woodMaterial = new THREE.MeshStandardMaterial({ map: woodTexture, roughness: 0.8, metalness: 0.0, color: 0xddaa88 });
+    mudMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0x8c7b6c, roughness: 0.8, metalness: 0.0,
+        normalMap: noiseTexture, normalScale: new THREE.Vector2(1.5, 1.5),
+        bumpMap: noiseTexture, bumpScale: 0.02
+    });
+
+    // --- 3. 模型列表与处理 ---
+    function getVertexCount(object) {
+        let count = 0;
+        object.traverse((child) => { if (child.isMesh && child.geometry) count += child.geometry.attributes.position.count; });
+        return count;
+    }
+
+    function processModel(object, name) {
+        const box = new THREE.Box3().setFromObject(object);
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const scaleFactor = 150 / maxDim;
+
+        object.position.sub(center); 
+        object.scale.setScalar(scaleFactor); 
+
+        object.traverse((child) => {
+            if (child.isMesh) {
+                child.userData.originalMaterial = child.material;
+                child.castShadow = true; child.receiveShadow = true;
+                if(!child.geometry.attributes.normal) child.geometry.computeVertexNormals();
+            }
+        });
+
+        const wrapper = new THREE.Group();
+        wrapper.add(object);
+        wrapper.scale.set(0,0,0);
+        
+        loadedModels.push({
+            name: name || `Model_${loadedModels.length + 1}`,
+            wrapper: wrapper,
+            vertexCount: getVertexCount(wrapper)
+        });
+        
+        renderModelList();
+        
+        // 如果是第一个模型，直接显示；否则等待切换
+        if (loadedModels.length === 1) {
+            triggerTransition(0);
+        }
+    }
+
+    function renderModelList() {
+        const container = document.getElementById('model-list-content');
+        container.innerHTML = ''; 
+        loadedModels.forEach((model, index) => {
+            const item = document.createElement('div');
+            item.className = `model-item ${index === activeModelIndex ? 'active' : ''}`;
+            item.onclick = () => { if(!isTransitioning && index !== activeModelIndex) triggerTransition(index); };
+            let displayName = model.name.length > 15 ? model.name.substring(0, 15) + '...' : model.name;
+            item.innerHTML = `<div class="model-name">${index+1}. ${displayName}</div><div class="model-verts">${(model.vertexCount/1000).toFixed(1)}k</div>`;
+            container.appendChild(item);
+        });
+    }
+
+    // --- 4. 丝滑过渡系统 (Transition System) ---
+    
+    // 触发过渡的入口
+    function triggerTransition(newIndex) {
+        if (newIndex < 0 || newIndex >= loadedModels.length) return;
+        if (isTransitioning) return; // 防止动画重叠
+
+        transitionTargetIndex = newIndex;
+        isTransitioning = true;
+        transitionPhase = 1; // Start shrinking old model
+
+        // 视觉反馈
+        document.getElementById('sys-status').innerText = "BUFFERING...";
+        document.getElementById('sys-status').style.color = "#00ff00";
+        
+        // 激活扫描环
+        scanRing.visible = true;
+        scanRing.material.opacity = 1;
+        scanRing.scale.set(1.5, 1.5, 1.5);
+    }
+
+    // 在每一帧调用的过渡逻辑
+    function updateTransition() {
+        if (!isTransitioning) return;
+
+        const animationSpeed = 0.15; // 动画速度
+        
+        // 缓冲环动画
+        scanRing.rotation.z += 0.1;
+        
+        // 阶段 1: 旧模型缩小 / 离场
+        if (transitionPhase === 1) {
+            // 环缩小
+            scanRing.scale.lerp(new THREE.Vector3(1, 1, 1), animationSpeed);
+            
+            if (activeModelIndex !== -1) {
+                const oldWrapper = loadedModels[activeModelIndex].wrapper;
+                // 快速缩小
+                oldWrapper.scale.lerp(new THREE.Vector3(0, 0, 0), animationSpeed);
+                
+                if (oldWrapper.scale.x < 0.05) {
+                    oldWrapper.scale.set(0,0,0);
+                    pivotGroup.remove(oldWrapper);
+                    transitionPhase = 2; // 进入下一阶段
+                    
+                    // 切换数据
+                    activeModelIndex = transitionTargetIndex;
+                    const newWrapper = loadedModels[activeModelIndex].wrapper;
+                    pivotGroup.add(newWrapper);
+                    newWrapper.scale.set(0,0,0);
+                    applyMaterialMode(currentMaterialIndex);
+                    renderModelList();
+                }
+            } else {
+                // 如果当前没有模型（第一次加载），直接跳到阶段2
+                activeModelIndex = transitionTargetIndex;
+                const newWrapper = loadedModels[activeModelIndex].wrapper;
+                pivotGroup.add(newWrapper);
+                transitionPhase = 2;
+                renderModelList();
+            }
+        }
+        
+        // 阶段 2: 新模型放大 / 进场
+        else if (transitionPhase === 2) {
+            const newWrapper = loadedModels[activeModelIndex].wrapper;
+            
+            // 弹性放大
+            newWrapper.scale.lerp(new THREE.Vector3(1, 1, 1), animationSpeed);
+            
+            // 环淡出
+            scanRing.material.opacity = THREE.MathUtils.lerp(scanRing.material.opacity, 0, 0.1);
+            scanRing.scale.lerp(new THREE.Vector3(1.5, 1.5, 1.5), 0.05);
+
+            if (newWrapper.scale.x > 0.99) {
+                newWrapper.scale.set(1,1,1);
+                isTransitioning = false;
+                transitionPhase = 0;
+                scanRing.visible = false;
+                targetScale = 1.0; // 重置用户缩放
+                
+                document.getElementById('sys-status').innerText = "READY";
+                document.getElementById('sys-status').style.color = "#ffffff";
+            }
+        }
+    }
+
+    function applyMaterialMode(modeIndex) {
+        if (activeModelIndex === -1) return;
+        const wrapper = loadedModels[activeModelIndex].wrapper;
+        const mode = MODES[modeIndex];
+        wrapper.traverse((child) => {
+            if (child.isMesh) {
+                switch (mode) {
+                    case 'original': child.material = child.userData.originalMaterial; break;
+                    case 'plaster': child.material = plasterMaterial; break;
+                    case 'wood': child.material = woodMaterial; break;
+                    case 'mud': child.material = mudMaterial; break;
+                }
+            }
+        });
+        document.querySelectorAll('.mode-item').forEach((el, idx) => {
+            if (idx === modeIndex) el.classList.add('active');
+            else el.classList.remove('active');
+        });
+    }
+
+    // --- 5. 文件加载器 ---
+    const fileInput = document.getElementById('file-input');
+    fileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const url = URL.createObjectURL(file);
+        const ext = file.name.split('.').pop().toLowerCase();
+        document.getElementById('sys-status').innerText = "LOADING...";
+        const onLoad = (obj) => { processModel(obj.scene || obj, file.name); };
+        if (ext === 'glb' || ext === 'gltf') new THREE.GLTFLoader().load(url, onLoad);
+        else if (ext === 'obj') new THREE.OBJLoader().load(url, onLoad);
+        else if (ext === 'ply') new THREE.PLYLoader().load(url, (geo) => {
+            geo.computeVertexNormals(); onLoad(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({color:0xaaaaaa})));
+        });
+    });
+
+    const sphereGeo = new THREE.TorusKnotGeometry(60, 20, 150, 20); 
+    const sphereMat = new THREE.MeshStandardMaterial({ color: 0x555555 });
+    processModel(new THREE.Mesh(sphereGeo, sphereMat), "Demo_Knot.obj");
+    processModel(new THREE.Mesh(new THREE.BoxGeometry(100,100,100), sphereMat), "Demo_Cube.obj");
+
+
+    // --- 6. MEDIAPIPE 手势识别 (带状态机) ---
+    const videoElement = document.getElementById('video-input');
+    const handCursor = document.getElementById('hand-cursor');
+    const gestureBar = document.getElementById('gesture-bar');
+    
+    function onResults(results) {
+        const landmarks = results.multiHandLandmarks?.[0];
+        
+        if (!landmarks) {
+            // 无手部检测：重置
+            currentState = GESTURE_STATE.IDLE;
+            handCursor.style.display = 'none';
+            gestureBar.style.width = '0px';
+            return;
+        }
+
+        // 1. 基础数据获取
+        handCursor.style.display = 'block';
+        const palm = landmarks[9];
+        handCursor.style.left = (palm.x * 100) + '%';
+        handCursor.style.top = (palm.y * 100) + '%';
+        
+        // 旋转始终有效 (除非在 Locked 状态，为了防止切模型时乱转，可以限制)
+        if (currentState !== GESTURE_STATE.LOCKED) {
+            targetRotationY = (palm.x - 0.5) * CONFIG.rotationSensitivity;
+            targetRotationX = (palm.y - 0.5) * CONFIG.rotationSensitivity;
+        }
+
+        // 2. 手势判定
+        const wrist = landmarks[0];
+        const getDist = (i) => Math.sqrt(Math.pow(landmarks[i].x - wrist.x, 2) + Math.pow(landmarks[i].y - wrist.y, 2));
+        
+        // 手指数据
+        const dThumb = getDist(4), dIndex = getDist(8), dMiddle = getDist(12), dRing = getDist(16), dPinky = getDist(20);
+        const avgInner3 = (dIndex + dMiddle + dRing) / 3;
+        const avgAll4 = (dIndex + dMiddle + dRing + dPinky) / 4;
+
+        // 判定条件
+        const isFist = avgAll4 < CONFIG.fistThreshold;
+        const isSix = (dPinky > avgInner3 * 1.5) && (dThumb > avgInner3 * 1.2) && (avgInner3 < CONFIG.sixThreshold);
+        const isOpen = !isFist && !isSix; // 简单判定张开
+
+        // 3. 状态机逻辑
+        const now = Date.now();
+        const gestureStatusText = document.getElementById('gesture-status');
+
+        switch (currentState) {
+            case GESTURE_STATE.IDLE:
+                handCursor.className = 'hand-cursor';
+                gestureBar.style.width = '0px';
+                gestureStatusText.innerText = "WAITING";
+                gestureStatusText.style.color = "#aaa";
+                
+                if (isSix) {
+                    currentState = GESTURE_STATE.DETECTING_SIX;
+                    gestureStartTime = now;
+                } else if (isFist) {
+                    currentState = GESTURE_STATE.DETECTING_FIST;
+                    gestureStartTime = now;
+                } else {
+                    // Open Hand: Zoom logic
+                    const pinchDist = Math.sqrt(Math.pow(landmarks[4].x - landmarks[8].x, 2) + Math.pow(landmarks[4].y - landmarks[8].y, 2));
+                    let factor = (pinchDist - 0.05) * 4; if (factor < 0) factor = 0;
+                    targetScale = 0.5 + factor * 2.5;
+                    document.getElementById('scale-status').innerText = Math.round(targetScale * 100) + "%";
+                }
+                break;
+
+            case GESTURE_STATE.DETECTING_SIX:
+                if (isSix) {
+                    // 计算保持时间进度
+                    const elapsed = now - gestureStartTime;
+                    const progress = Math.min(elapsed / CONFIG.gestureHoldTime, 1.0);
+                    
+                    gestureBar.style.width = (progress * 50) + 'px'; // 进度条
+                    gestureStatusText.innerText = "HOLD 6...";
+                    gestureStatusText.style.color = "#ffd700";
+                    handCursor.className = 'hand-cursor loading'; // 旋转光标
+                    
+                    if (elapsed > CONFIG.gestureHoldTime) {
+                        // *** 触发：切换模型 ***
+                        if (!isTransitioning) {
+                            const nextIndex = (activeModelIndex + 1) % loadedModels.length;
+                            triggerTransition(nextIndex);
+                        }
+                        currentState = GESTURE_STATE.LOCKED; // 锁定
+                    }
+                } else {
+                    // 中断
+                    currentState = GESTURE_STATE.IDLE;
+                }
+                break;
+
+            case GESTURE_STATE.DETECTING_FIST:
+                if (isFist) {
+                    const elapsed = now - gestureStartTime;
+                    const progress = Math.min(elapsed / CONFIG.gestureHoldTime, 1.0);
+                    
+                    gestureBar.style.width = (progress * 50) + 'px';
+                    gestureStatusText.innerText = "HOLD FIST...";
+                    gestureStatusText.style.color = "#ff8855";
+                    handCursor.className = 'hand-cursor loading';
+                    
+                    if (elapsed > CONFIG.gestureHoldTime) {
+                        // *** 触发：切换材质 ***
+                        currentMaterialIndex = (currentMaterialIndex + 1) % MODES.length;
+                        applyMaterialMode(currentMaterialIndex);
+                        currentState = GESTURE_STATE.LOCKED;
+                    }
+                } else {
+                    currentState = GESTURE_STATE.IDLE;
+                }
+                break;
+
+            case GESTURE_STATE.LOCKED:
+                handCursor.className = 'hand-cursor'; // 恢复普通光标
+                gestureBar.style.width = '50px';
+                gestureStatusText.innerText = "RELEASE HAND";
+                gestureStatusText.style.color = "#ff0000";
+                
+                // 只有完全张开手，才解除锁定
+                if (isOpen) {
+                    currentState = GESTURE_STATE.IDLE;
+                }
+                break;
+        }
+    }
+
+    const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+    hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+    hands.onResults(onResults);
+
+    const cameraUtils = new Camera(videoElement, { onFrame: async () => { await hands.send({image: videoElement}); }, width: 320, height: 240 });
+    cameraUtils.start();
+
+    // --- 7. 主循环 (动画核心) ---
+    function animate() {
+        requestAnimationFrame(animate);
+
+        // 1. 处理过渡动画
+        updateTransition();
+
+        // 2. 处理常规平滑运动 (Lerp)
+        pivotGroup.rotation.y = CONFIG.lerpSpeed * targetRotationY + (1-CONFIG.lerpSpeed) * pivotGroup.rotation.y;
+        pivotGroup.rotation.x = CONFIG.lerpSpeed * targetRotationX + (1-CONFIG.lerpSpeed) * pivotGroup.rotation.x;
+        
+        // 3. 处理缩放 (仅当不处于过渡状态时)
+        if (!isTransitioning && activeModelIndex !== -1) {
+            const wrapper = loadedModels[activeModelIndex].wrapper;
+            wrapper.scale.setScalar(0.1 * targetScale + 0.9 * wrapper.scale.x);
+        }
+
+        // 4. 环境自转
+        pivotGroup.rotation.z = Math.sin(Date.now()*0.0005) * 0.1;
+        
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+</script>
+</body>
+</html>
